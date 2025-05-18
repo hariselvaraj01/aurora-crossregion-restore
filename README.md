@@ -1,93 +1,118 @@
-# Aurora Cross-Account Snapshot Restore & Column Encryption (CloudFormation + Lambda)
+# Aurora Cross-Account Snapshot Restore & Column Encryption
 
-This project automates the process of restoring an encrypted Aurora MySQL snapshot from another AWS account (without sharing the original KMS key) and running a stored procedure to encrypt specific columns.
-
-## Features
-
-- Cross-account encrypted Aurora snapshot restore
-- Uses a **different KMS key** (owned by target account)
-- Aurora DB cluster + instance provisioning via CloudFormation
-- Post-restore column-level encryption using AWS Lambda and MySQL stored procedure
+This project provides a complete, automated solution to:
+- Restore an encrypted Aurora MySQL snapshot from another AWS account **without sharing the original KMS key**
+- Provision a new cluster and instance in the target account
+- Run a **MySQL stored procedure** via **AWS Lambda** to encrypt sensitive columns using AES encryption
 
 ---
 
-## Project Structure
+## Why This Project?
+
+Typical snapshot sharing fails when the snapshot is encrypted with a **Customer Managed Key (CMEK)**. This solution:
+- Uses a new KMS key in **Account B**
+- **Re-encrypts the snapshot**
+- Automates deployment with CloudFormation
+- Encrypts sensitive DB columns (like `email`, `password`) securely
+
+---
+
+## Architecture
+
+1. **Account A**: Shares a snapshot to Account B
+2. **Account B**:
+   - Copies and re-encrypts the snapshot using its own KMS key
+   - Deploys Aurora from the copied snapshot
+   - Uses Lambda to run a stored procedure that encrypts columns
+
+---
+
+## Folder Structure
 
 ```
 aurora-crossaccount-restore-encrypt/
-├── template.yaml                 # CloudFormation Template
+├── template.yaml                 # CloudFormation template
 ├── lambda/
-│   ├── index.py                  # Lambda function to execute encryption
-│   └── encrypt_column_proc.sql   # SQL to define the encryption procedure
+│   ├── index.py                  # Lambda function to connect to Aurora and encrypt data
+│   └── encrypt_column_proc.sql   # MySQL stored procedure to encrypt columns dynamically
 ```
 
 ---
 
 ## Prerequisites
 
-- S3 bucket to upload zipped Lambda package
-- AWS CLI configured with access to Account B
-- Subnet and security group IDs for Aurora cluster
-- A KMS key in Account B to re-encrypt the snapshot
+- An **Aurora MySQL snapshot** shared from another AWS account
+- A **KMS key in Account B** to re-encrypt the snapshot
+- An **S3 bucket** in Account B to upload the zipped Lambda code
+- Subnet IDs and security group ID in a VPC where Aurora can be deployed
+- AWS CLI configured with permissions to deploy CloudFormation and RDS
 
 ---
 
-## Deployment Instructions
+## Deployment Steps
 
-### 1. Zip and Upload Lambda Code
+### 1. Zip and Upload Lambda
 
 ```bash
 cd lambda
 zip -r ../encrypt.zip .
-aws s3 cp ../encrypt.zip s3://your-bucket-name/lambda/encrypt.zip
+aws s3 cp ../encrypt.zip s3://<your-bucket-name>/lambda/encrypt.zip
 ```
 
-### 2. Update `template.yaml`
+> Note: Update `template.yaml` to replace `PLACEHOLDER_BUCKET` with your actual S3 bucket.
 
-Replace:
-- `PLACEHOLDER_BUCKET` with your actual S3 bucket name
+---
 
-### 3. Deploy CloudFormation
+### 2. Deploy CloudFormation Stack
 
 ```bash
-aws cloudformation deploy   --template-file template.yaml   --stack-name aurora-restore-encrypt   --capabilities CAPABILITY_NAMED_IAM   --parameter-overrides \
-    SnapshotIdentifier=arn:aws:rds:region:accountA:snapshot:snap-name \
-    DBClusterIdentifier=my-restored-cluster \
-    DBInstanceIdentifier=my-instance \
-    KmsKeyId=arn:aws:kms:region:accountB:key/key-id \
-    DBName=mydb \
-    MasterUsername=admin \
-    MasterUserPassword=MySecurePass123 \
-    DBInstanceClass=db.r6g.large \
-    SubnetIds='["subnet-abc","subnet-def"]' \
-    SecurityGroupIds='["sg-xyz"]' \
-    LambdaEncryptionKey=mysecretkey
+aws cloudformation deploy   --template-file template.yaml   --stack-name aurora-restore-encrypt   --capabilities CAPABILITY_NAMED_IAM   --parameter-overrides     SnapshotIdentifier=arn:aws:rds:us-east-1:111111111111:cluster-snapshot:shared-snapshot     DBClusterIdentifier=my-restored-cluster     DBInstanceIdentifier=my-instance     KmsKeyId=arn:aws:kms:us-east-1:222222222222:key/abc-1234-xyz     DBName=mydb     MasterUsername=admin     MasterUserPassword=MySecurePass123     DBInstanceClass=db.r6g.large     SubnetIds='["subnet-abc123", "subnet-def456"]'     SecurityGroupIds='["sg-0a1b2c3d4e"]'     LambdaEncryptionKey=mysecretkey
 ```
 
 ---
 
-## Output
+## Lambda Details
 
-- Aurora cluster and instance deployed
-- Lambda can be triggered to encrypt specified columns (email, password in this example)
-- Modify the Lambda environment variables for custom table/columns
+- **index.py** connects to the Aurora cluster
+- Runs the procedure in **encrypt_column_proc.sql**
+- Encrypts columns like `email`, `password` using `AES_ENCRYPT()` and `TO_BASE64()`
+
+You can change the table name, column list, or encryption key by updating Lambda environment variables in the CloudFormation stack.
 
 ---
 
 ## Security Notes
 
-- This setup avoids sharing the original KMS key by re-encrypting the snapshot
-- Credentials are passed via environment variables — for production, use Secrets Manager
-- Add IAM permissions to limit scope in Lambda
+- Avoid hardcoding DB credentials; consider **AWS Secrets Manager** for production
+- Ensure the **KMS key** is securely managed and rotated
+- The Lambda role is scoped for basic logging and RDS access; restrict further as needed
+
+---
+
+## Output
+
+- A restored Aurora MySQL cluster
+- A Lambda function ready to encrypt data
+- Columns like `email` and `password` will be AES-encrypted with your provided key
 
 ---
 
 ## License
 
-MIT License
+This project is licensed under the [MIT License](LICENSE)
 
 ---
 
-## Author
+## Contributors
 
-Generated by OpenAI GPT with custom deployment logic
+Built with OpenAI GPT, customized and maintained by [Your Name]
+
+---
+
+## Want More?
+
+- [ ] Add GitHub Actions workflow for deployment
+- [ ] Extend to support decryption
+- [ ] Parameterize column/table selection via Secrets Manager or EventBridge
+
+Pull requests and issues are welcome!
