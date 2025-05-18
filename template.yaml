@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cross-account Aurora MySQL snapshot restore and column encryption
+
+Parameters:
+  SnapshotIdentifier:
+    Type: String
+    Description: ARN of the shared snapshot from Account A
+  DBClusterIdentifier:
+    Type: String
+    Default: restored-cluster
+  DBInstanceIdentifier:
+    Type: String
+    Default: restored-instance
+  KmsKeyId:
+    Type: String
+    Description: ARN of the KMS key in Account B
+  DBName:
+    Type: String
+    Default: mydb
+  MasterUsername:
+    Type: String
+    Default: admin
+  MasterUserPassword:
+    Type: String
+    NoEcho: true
+  DBInstanceClass:
+    Type: String
+    Default: db.r6g.large
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+  LambdaEncryptionKey:
+    Type: String
+    Description: Encryption key to pass to Lambda
+
+Resources:
+  RestoredDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-mysql
+      SnapshotIdentifier: !Ref SnapshotIdentifier
+      DBClusterIdentifier: !Ref DBClusterIdentifier
+      KmsKeyId: !Ref KmsKeyId
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      DatabaseName: !Ref DBName
+      VpcSecurityGroupIds: !Ref SecurityGroupIds
+      DBSubnetGroupName: !Ref DBSubnetGroup
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for Aurora Cluster
+      SubnetIds: !Ref SubnetIds
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBClusterIdentifier: !Ref DBClusterIdentifier
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: aurora-mysql
+      PubliclyAccessible: true
+
+  AuroraEncryptionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: AuroraEncryptProcedure
+      Runtime: python3.11
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: index.lambda_handler
+      Timeout: 60
+      Code:
+        S3Bucket: PLACEHOLDER_BUCKET
+        S3Key: lambda/encrypt.zip
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RestoredDBCluster.Endpoint.Address
+          DB_NAME: !Ref DBName
+          DB_USER: !Ref MasterUsername
+          DB_PASS: !Ref MasterUserPassword
+          ENCRYPTION_KEY: !Ref LambdaEncryptionKey
+          TABLE_NAME: users
+          COLUMN_LIST: email,password
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambda-aurora-encrypt-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaBasicExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - rds:*
+                  - secretsmanager:GetSecretValue
+                Resource: "*"
